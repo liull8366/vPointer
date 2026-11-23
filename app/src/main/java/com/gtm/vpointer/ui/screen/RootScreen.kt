@@ -11,6 +11,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -26,16 +27,19 @@ enum class RootCheck { UNKNOWN, CHECKING, GRANTED, DENIED }
 /**
  * Root 权限页（第四个 Tab，排在「Lua 日志」右侧）。
  *
- * 目前是**预留页**：具体功能待定，这里先放一个 root 可用性自检，
- * 方便后续把需要 root 的能力（守护脚本、权限直授、su 命令面板等）长在这页上。
+ * 定位：**对原版功能的增强**，不改原逻辑，只用 root 把「稳定运行」需要的手工步骤自动化：
+ *   - `appops set … SYSTEM_ALERT_WINDOW allow`：免去手动点悬浮窗授权
+ *   - `dumpsys deviceidle whitelist +包名`：加 Doze 白名单，后台不被轻易回收
  *
- * 版式与其它页一致：标题 → 灰字说明 → 状态 → 可滚动内容 → 底部整宽主按钮。
+ * 不含守护脚本（按需求暂不做）。root 不可用时按钮会给出失败原因，原版功能仍可手动使用。
  */
 @Composable
 fun RootScreen(
     check: RootCheck,
     detail: String,
-    onCheck: () -> Unit
+    message: String,
+    onCheck: () -> Unit,
+    onGrant: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -46,15 +50,15 @@ fun RootScreen(
             text = "Root 权限",
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(bottom = 16.dp)
+            modifier = Modifier.padding(bottom = 12.dp)
         )
 
         Text(
-            text = "预留页 —— 具体功能待定。这里先提供一次 root 可用性自检（执行 su -c id），" +
-                "后续需要 root 的能力会落在这一页。",
+            text = "用 root 给原版功能加一层保险：把「悬浮窗授权」和「电池白名单」一次做完。" +
+                "不改原有服务逻辑，root 不可用时也不影响手动使用。",
             fontSize = 14.sp,
             color = Color.Gray,
-            modifier = Modifier.padding(bottom = 16.dp)
+            modifier = Modifier.padding(bottom = 12.dp)
         )
 
         val (statusText, statusColor) = when (check) {
@@ -70,38 +74,64 @@ fun RootScreen(
             color = statusColor
         )
 
-        if (detail.isNotEmpty()) {
-            Text(
-                text = detail,
-                fontSize = 12.sp,
-                fontFamily = FontFamily.Monospace,
-                color = Color.Gray,
-                modifier = Modifier.padding(top = 8.dp)
-            )
-        }
-
-        HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
-
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
                 .verticalScroll(rememberScrollState())
         ) {
+            if (detail.isNotEmpty()) {
+                Text(
+                    text = detail,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 14.dp))
+
             Text(
-                text = "后续功能（待定）",
+                text = "一键授权",
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 8.dp)
+                modifier = Modifier.padding(bottom = 6.dp)
             )
             Text(
-                text = "· 守护脚本 / 开机自启（root 拉起前台服务）\n" +
-                    "· 悬浮窗、电池白名单等权限一键直授（appops / deviceidle）\n" +
-                    "· 常用 su 命令面板与执行结果回显\n" +
-                    "· 其它需要 root 的调试开关",
-                fontSize = 13.sp,
+                text = "执行：\nappops set com.gtm.vpointer SYSTEM_ALERT_WINDOW allow\n" +
+                    "dumpsys deviceidle whitelist +com.gtm.vpointer",
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
                 color = Color.Gray,
-                lineHeight = 20.sp
+                modifier = Modifier.padding(bottom = 10.dp)
+            )
+            OutlinedButton(
+                onClick = onGrant,
+                enabled = check != RootCheck.CHECKING,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(46.dp)
+            ) {
+                Text("一键授权（悬浮窗 + 电池白名单）", fontSize = 15.sp)
+            }
+
+            if (message.isNotEmpty()) {
+                Text(
+                    text = message,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = Color(0xFF2196F3),
+                    modifier = Modifier.padding(top = 12.dp)
+                )
+            }
+
+            Text(
+                text = "说明：显示「未获得 root」时，请到 root 管理器（KernelSU / Magisk）给本应用授权，" +
+                    "再回来点「重新检测」。授予后悬浮窗不再需要手点系统弹窗，服务也更不容易被 Doze 回收。",
+                fontSize = 12.sp,
+                color = Color.Gray,
+                modifier = Modifier.padding(top = 14.dp)
             )
         }
 

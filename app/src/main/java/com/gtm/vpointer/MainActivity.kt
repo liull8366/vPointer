@@ -34,6 +34,7 @@ import com.gtm.vpointer.ui.screen.DisplaySelectScreen
 import com.gtm.vpointer.ui.screen.ForwardStatus
 import com.gtm.vpointer.ui.screen.LuaLogScreen
 import com.gtm.vpointer.ui.screen.LuaLogStatus
+import com.gtm.vpointer.root.RootShell
 import com.gtm.vpointer.ui.screen.PortForwardScreen
 import com.gtm.vpointer.ui.screen.RootCheck
 import com.gtm.vpointer.ui.screen.RootScreen
@@ -75,9 +76,10 @@ class MainActivity : ComponentActivity() {
     /** 样式下发节流用：合并滑块的高频 onValueChange */
     private var luaStyleJob: Job? = null
 
-    // Root 权限页（预留）：只做 su 可用性自检
+    // Root 权限页（预留）：root 自检 + 一键授权
     private var rootCheck by mutableStateOf(RootCheck.UNKNOWN)
     private var rootDetail by mutableStateOf("")
+    private var rootMessage by mutableStateOf("")
 
     // 光标样式相关状态
     private val cursorIconStore by lazy { CursorIconStore(this) }
@@ -417,7 +419,9 @@ class MainActivity : ComponentActivity() {
                             else -> RootScreen(
                                 check = rootCheck,
                                 detail = rootDetail,
-                                onCheck = { checkRoot() }
+                                message = rootMessage,
+                                onCheck = { checkRoot() },
+                                onGrant = { grantRoot() }
                             )
                         }
                     }
@@ -579,6 +583,32 @@ class MainActivity : ComponentActivity() {
         ContextCompat.startForegroundService(this, intent)
         luaRunning = true
         refreshLuaNics()
+    }
+
+    /**
+     * 一键授权（root 增强，不改原有服务逻辑）：
+     *   appops set …  SYSTEM_ALERT_WINDOW allow  → 免手点悬浮窗授权
+     *   dumpsys deviceidle whitelist +包名        → Doze 白名单，后台不被轻易回收
+     */
+    private fun grantRoot() {
+        if (rootCheck == RootCheck.CHECKING) return
+        rootMessage = "执行中 …"
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                RootShell.exec(
+                    "appops set $packageName SYSTEM_ALERT_WINDOW allow; " +
+                        "dumpsys deviceidle whitelist +$packageName; " +
+                        "appops get $packageName SYSTEM_ALERT_WINDOW",
+                    15_000
+                )
+            }
+            rootMessage = if (result.ok) {
+                rootCheck = RootCheck.GRANTED
+                "授权成功：\n" + result.output.ifEmpty { "(命令无输出)" }
+            } else {
+                "授权失败（su 不可用）：\n" + result.output
+            }
+        }
     }
 
     /**
