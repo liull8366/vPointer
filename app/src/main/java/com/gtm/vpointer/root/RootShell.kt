@@ -60,30 +60,17 @@ object RootShell {
             }
 
             val (out, code) = attempt
-            // 成功判据：退出码 0 且拿到 uid=0（避免把「su 存在但未授权」误判为成功）
-            if (code == 0 && (out.contains("uid=0") || commandRanAsRoot(command, out))) {
+            // 成功判据：**优先看退出码**。appops/dumpsys 这类命令本身有输出但不含 uid=0，
+            // 早先要求「输出含 uid=0」会把成功误判成失败，并且会继续尝试后面的候选路径、
+            // 把同一组命令重复执行多次（实测确实重复跑了 6 遍）。
+            if (code == 0) {
                 cachedSu = candidate
-                return Result(true, out, candidate)
+                return Result(true, out.ifEmpty { "(命令无输出)" }, candidate)
             }
             tried.append(candidate).append(" → ").append(out.ifEmpty { "退出码 $code" }).append('\n')
         }
         cachedSu = null
         return Result(false, tried.toString().trim(), null)
-    }
-
-    /**
-     * 有些命令（如 appops set）本身没有输出，靠退出码判断即可；
-     * 这里用一个显式 marker 判定：执行 `id` 探针确认身份。
-     */
-    private fun commandRanAsRoot(command: String, output: String): Boolean {
-        if (output.isNotEmpty()) return false
-        val probe = runCatching {
-            val p = ProcessBuilder(cachedSu ?: "su", "-c", "id").redirectErrorStream(true).start()
-            val id = p.inputStream.bufferedReader().use { it.readText() }
-            p.waitFor(3, TimeUnit.SECONDS)
-            id
-        }.getOrElse { "" }
-        return probe.contains("uid=0")
     }
 
     /** 简单探针：能不能拿到 root（供 UI 自检用）。 */
