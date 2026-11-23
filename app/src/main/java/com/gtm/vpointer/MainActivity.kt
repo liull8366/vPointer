@@ -35,6 +35,8 @@ import com.gtm.vpointer.ui.screen.ForwardStatus
 import com.gtm.vpointer.ui.screen.LuaLogScreen
 import com.gtm.vpointer.ui.screen.LuaLogStatus
 import com.gtm.vpointer.ui.screen.PortForwardScreen
+import com.gtm.vpointer.ui.screen.RootCheck
+import com.gtm.vpointer.ui.screen.RootScreen
 import com.gtm.vpointer.ui.screen.ServiceState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -72,6 +74,10 @@ class MainActivity : ComponentActivity() {
     private var luaNics by mutableStateOf<List<NicInfo>>(emptyList())
     /** 样式下发节流用：合并滑块的高频 onValueChange */
     private var luaStyleJob: Job? = null
+
+    // Root 权限页（预留）：只做 su 可用性自检
+    private var rootCheck by mutableStateOf(RootCheck.UNKNOWN)
+    private var rootDetail by mutableStateOf("")
 
     // 光标样式相关状态
     private val cursorIconStore by lazy { CursorIconStore(this) }
@@ -313,6 +319,11 @@ class MainActivity : ComponentActivity() {
                             },
                             text = { Text("Lua 日志") }
                         )
+                        Tab(
+                            selected = mainPage == 3,
+                            onClick = { mainPage = 3 },
+                            text = { Text("Root 权限") }
+                        )
                     }
                     Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                         when (mainPage) {
@@ -368,7 +379,7 @@ class MainActivity : ComponentActivity() {
                                 onStart = { startForward() },
                                 onStop = { stopForward() }
                             )
-                            else -> LuaLogScreen(
+                            2 -> LuaLogScreen(
                                 targetHost = LuaLogService.TARGET_HOST,
                                 targetPort = LuaLogService.TARGET_PORT,
                                 nics = luaNics,
@@ -402,6 +413,11 @@ class MainActivity : ComponentActivity() {
                                 onToggleEdit = { toggleLuaEdit() },
                                 onStart = { startLuaLog() },
                                 onStop = { stopLuaLog() }
+                            )
+                            else -> RootScreen(
+                                check = rootCheck,
+                                detail = rootDetail,
+                                onCheck = { checkRoot() }
                             )
                         }
                     }
@@ -563,6 +579,62 @@ class MainActivity : ComponentActivity() {
         ContextCompat.startForegroundService(this, intent)
         luaRunning = true
         refreshLuaNics()
+    }
+
+    /**
+     * Root 页的可用性自检。
+     *
+     * 先跑 `sh -c id` 证明 ProcessBuilder 本身可用（非 root 也能跑），
+     * 再按常见路径逐个尝试 `su -c id` —— 不同 root 方案（Magisk / KernelSU / SuperSU）
+     * 把 su 放在不同位置，而且有些方案只在自己的 mount namespace 里可见，
+     * 直接裸调 "su" 会拿到 ENOENT，所以要把每个候选的失败原因都记下来。
+     */
+    private fun checkRoot() {
+        if (rootCheck == RootCheck.CHECKING) return
+        rootCheck = RootCheck.CHECKING
+        rootDetail = ""
+        lifecycleScope.launch {
+            val (state, detail) = withContext(Dispatchers.IO) { probeRoot() }
+            rootCheck = state
+            rootDetail = detail
+        }
+    }
+
+    private fun probeRoot(): Pair<RootCheck, String> {
+        val report = StringBuilder()
+
+        // 1) 基线：应用能不能正常起进程
+        val shellOk = runCatching {
+            val p = ProcessBuilder("sh", "-c", "id").redirectErrorStream(true).start()
+            val out = p.inputStream.bufferedReader().use { it.readText() }.trim()
+            p.waitFor()
+            out
+        }.getOrElse { "启动 sh 失败：${it.message}" }
+        report.append("sh -c id → ").append(shellOk.take(120)).append('\n')
+
+        // 2) 逐个候选路径尝试 su
+        val candidates = listOf(
+            "su",
+            "/system/bin/su",
+            "/system/xbin/su",
+            "/sbin/su",
+            "/debug_ramdisk/su",
+            "/data/adb/ksu/bin/su",
+            "/data/adb/magisk/su"
+        )
+        for (candidate in candidates) {
+            val attempt = runCatching {
+                val p = ProcessBuilder(candidate, "-c", "id").redirectErrorStream(true).start()
+                val out = p.inputStream.bufferedReader().use { it.readText() }.trim()
+                val code = p.waitFor()
+                "退出码 $code：" + out.take(120)
+            }.getOrElse { e -> "无法执行（${e.javaClass.simpleName}: ${e.message}）" }
+            report.append(candidate).append(" → ").append(attempt).append('\n')
+            if (attempt.contains("uid=0")) {
+                return RootCheck.GRANTED to report.toString().trim()
+            }
+        }
+        return RootCheck.DENIED to report.toString().trim()
     }
 
     private fun stopLuaLog() {
