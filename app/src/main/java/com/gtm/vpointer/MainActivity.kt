@@ -34,6 +34,7 @@ import com.gtm.vpointer.ui.screen.DisplaySelectScreen
 import com.gtm.vpointer.ui.screen.ForwardStatus
 import com.gtm.vpointer.ui.screen.LuaLogScreen
 import com.gtm.vpointer.ui.screen.LuaLogStatus
+import com.gtm.vpointer.fusion.FusionScript
 import com.gtm.vpointer.root.RootShell
 import com.gtm.vpointer.ui.screen.PortForwardScreen
 import com.gtm.vpointer.ui.screen.RootCheck
@@ -80,6 +81,10 @@ class MainActivity : ComponentActivity() {
     private var rootCheck by mutableStateOf(RootCheck.UNKNOWN)
     private var rootDetail by mutableStateOf("")
     private var rootMessage by mutableStateOf("")
+    // 屏幕触摸转发（内嵌脚本）状态
+    private var fusionRunning by mutableStateOf(false)
+    private var fusionState by mutableStateOf("IDLE")
+    private var fusionLog by mutableStateOf("")
 
     // 光标样式相关状态
     private val cursorIconStore by lazy { CursorIconStore(this) }
@@ -323,7 +328,10 @@ class MainActivity : ComponentActivity() {
                         )
                         Tab(
                             selected = mainPage == 3,
-                            onClick = { mainPage = 3 },
+                            onClick = {
+                                mainPage = 3
+                                refreshFusion()
+                            },
                             text = { Text("Root 权限") }
                         )
                     }
@@ -420,6 +428,12 @@ class MainActivity : ComponentActivity() {
                                 check = rootCheck,
                                 detail = rootDetail,
                                 message = rootMessage,
+                                fusionRunning = fusionRunning,
+                                fusionState = fusionState,
+                                fusionLog = fusionLog,
+                                onFusionStart = { fusionStart() },
+                                onFusionStop = { fusionStop() },
+                                onFusionRefresh = { refreshFusion() },
                                 onCheck = { checkRoot() },
                                 onGrant = { grantRoot() }
                             )
@@ -665,6 +679,34 @@ class MainActivity : ComponentActivity() {
             }
         }
         return RootCheck.DENIED to report.toString().trim()
+    }
+
+    // ---------------- 屏幕触摸转发（内嵌脚本） ----------------
+
+    private fun fusionStart() {
+        fusionState = "STARTING"
+        lifecycleScope.launch {
+            val out = withContext(Dispatchers.IO) { FusionScript.start(this@MainActivity) }
+            rootMessage = out
+            refreshFusion()
+        }
+    }
+
+    private fun fusionStop() {
+        lifecycleScope.launch {
+            val out = withContext(Dispatchers.IO) { FusionScript.stop(this@MainActivity) }
+            rootMessage = out
+            refreshFusion()
+        }
+    }
+
+    private fun refreshFusion() {
+        lifecycleScope.launch {
+            val st = withContext(Dispatchers.IO) { FusionScript.status(this@MainActivity) }
+            fusionState = st.state
+            fusionRunning = st.running
+            fusionLog = st.log
+        }
     }
 
     private fun stopLuaLog() {

@@ -7,15 +7,19 @@ plugins {
 android {
     namespace = "com.gtm.vpointer"
     compileSdk = 36
+    // 屏幕触摸转发的 native 帮助程序（EVIOCGRAB）
+    ndkVersion = "26.1.10909125"
 
     defaultConfig {
         applicationId = "com.gtm.vpointer"
         minSdk = 24
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk { abiFilters += "arm64-v8a" }
     }
 
 
@@ -47,6 +51,12 @@ android {
     }
     kotlinOptions {
         jvmTarget = "11"
+    }
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
     buildFeatures {
         compose = true

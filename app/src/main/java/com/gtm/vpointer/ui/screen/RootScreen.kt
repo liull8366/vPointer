@@ -1,6 +1,8 @@
 package com.gtm.vpointer.ui.screen
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -9,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -38,6 +41,12 @@ fun RootScreen(
     check: RootCheck,
     detail: String,
     message: String,
+    fusionRunning: Boolean,
+    fusionState: String,
+    fusionLog: String,
+    onFusionStart: () -> Unit,
+    onFusionStop: () -> Unit,
+    onFusionRefresh: () -> Unit,
     onCheck: () -> Unit,
     onGrant: () -> Unit
 ) {
@@ -123,6 +132,76 @@ fun RootScreen(
                     fontFamily = FontFamily.Monospace,
                     color = Color(0xFF2196F3),
                     modifier = Modifier.padding(top = 12.dp)
+                )
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 14.dp))
+
+            // ---------------- 屏幕触摸转发（内嵌脚本） ----------------
+            Text(
+                text = "屏幕触摸转发（内嵌脚本）",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+            Text(
+                text = "等价 touch_forwarder 模块：脚本自动探测网卡取出板子 IP，用 nc 监听 6532，" +
+                    "帮助程序以 root 独占触摸并把帧转发给板子。停止即释放触摸。",
+                fontSize = 11.sp,
+                color = Color.Gray,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            Text(
+                text = "状态：" + fusionState + if (fusionRunning) "（守护在跑）" else "（未运行）",
+                fontSize = 13.sp,
+                color = if (fusionRunning) Color(0xFF4CAF50) else Color.Gray
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = onFusionStart,
+                    enabled = check != RootCheck.CHECKING,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(44.dp)
+                ) {
+                    Text(if (fusionRunning) "重新启动" else "启动转发", fontSize = 14.sp)
+                }
+                OutlinedButton(
+                    onClick = onFusionStop,
+                    enabled = fusionRunning || fusionState != "STOPPED",
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(44.dp)
+                ) {
+                    Text("停止转发", fontSize = 14.sp)
+                }
+                OutlinedButton(
+                    onClick = onFusionRefresh,
+                    modifier = Modifier
+                        .weight(0.6f)
+                        .height(44.dp)
+                ) {
+                    Text("刷新", fontSize = 14.sp)
+                }
+            }
+
+            if (fusionLog.isNotEmpty()) {
+                Text(
+                    text = fusionLog,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(top = 10.dp)
                 )
             }
 

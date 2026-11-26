@@ -1,6 +1,7 @@
 package com.gtm.vpointer
 
 import android.content.Context
+import android.os.SystemClock
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkRequest
@@ -12,6 +13,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.Inet4Address
@@ -52,6 +54,14 @@ class PortForwarder(
         private const val BUFFER = 8192
         private const val CONNECT_TIMEOUT_MS = 5000
         private const val RESCAN_INTERVAL_MS = 2000L
+
+        /** 上游（到板子 :80）并发上限：板子的 lwIP TCP PCB 池只有 10 个且全局共享
+         *  （HTTP/WS/6535/6532 共用），端口转发每条下游都会新建一条上游，不设限就会把
+         *  板子 httpd 的 PCB 抢光 → 表现为"网卡宕机"（ping 通、TCP 全拒）。 */
+        private const val MAX_UPSTREAM = 4
+
+        /** 下游空闲多久就回收，及时把上游 PCB 还给板子 */
+        private const val IDLE_TIMEOUT_MS = 30_000
     }
 
     @Volatile private var server: ServerSocket? = null
@@ -64,6 +74,14 @@ class PortForwarder(
     @Volatile private var targetLocalIp: InetAddress? = null
 
     private val connections = Collections.synchronizedSet(HashSet<Socket>())
+
+    /** 上游（到板子 :80）并发上限：板子 lwIP 的 TCP PCB 池只有 10 个且全局共享，
+     *  端口转发每条下游都会新建一条上游，不设限就会把板子 httpd 的 PCB 抢光（表现为"网卡宕机"）。 */
+    private val upstreamSlots = Semaphore(MAX_UPSTREAM)
+
+    /** 上游建连失败后的指数退避（1s→2s→4s→8s 封顶），避免板子异常时被持续打 */
+    private var connectFailStreak = 0
+    private var nextConnectAllowedAt = 0L
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var connMgr: ConnectivityManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
@@ -136,7 +154,15 @@ class PortForwarder(
 
     private suspend fun handle(client: Socket) {
         connections += client
+        if (!upstreamSlots.tryAcquire()) {
+            // 上游并发已满：宁可关掉这条下游，也不去抢板子的 PCB
+            Log.w(TAG, "上游并发已达上限 $MAX_UPSTREAM，拒绝一条下游连接")
+            connections -= client
+            runCatching { client.close() }
+            return
+        }
         try {
+            runCatching { client.soTimeout = IDLE_TIMEOUT_MS } // 空闲回收：长期没数据的连接主动断，释放上游 PCB
             val upstream = connectUpstream() ?: return // 目标网卡缺失或上游不可达：直接关闭本连接
             try {
                 val cIn = client.getInputStream()
@@ -157,6 +183,7 @@ class PortForwarder(
         } finally {
             connections -= client
             runCatching { client.close() }
+            upstreamSlots.release()
         }
     }
 
@@ -165,6 +192,12 @@ class PortForwarder(
         val localIp = targetLocalIp
         if (net == null && localIp == null) {
             Log.w(TAG, "upstream rejected: target network not present")
+            return null
+        }
+        // 退避窗口内不再尝试：板子刚失败过，继续连只会把它仅有的 10 个 PCB 继续占住
+        val now = SystemClock.elapsedRealtime()
+        if (now < nextConnectAllowedAt) {
+            Log.w(TAG, "上游退避中，剩余 ${nextConnectAllowedAt - now}ms")
             return null
         }
         var s = Socket()
@@ -198,10 +231,16 @@ class PortForwarder(
             }
             s.tcpNoDelay = true
             s.connect(InetSocketAddress(TARGET_HOST, TARGET_PORT), CONNECT_TIMEOUT_MS)
+            connectFailStreak = 0
+            nextConnectAllowedAt = 0
             return s
         } catch (e: Exception) {
             Log.w(TAG, "upstream connect to $TARGET_HOST:$TARGET_PORT failed: ${e.message}")
             runCatching { s.close() }
+            connectFailStreak = (connectFailStreak + 1).coerceAtMost(3)
+            val backoff = 1000L shl connectFailStreak
+            nextConnectAllowedAt = SystemClock.elapsedRealtime() + backoff
+            Log.w(TAG, "上游失败 ${connectFailStreak} 次 → 退避 ${backoff}ms")
             return null
         }
     }
