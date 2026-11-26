@@ -60,6 +60,8 @@ class PointerService : Service() {
         // 触摸点落在光标窗口之外，点击才能穿透到下方应用
         // （部分 ROM 上 Presentation 的 DecorView 不认 FLAG_NOT_TOUCHABLE）。
         private const val CURSOR_OFFSET_PX = 4
+    /** 按下缩放多久没新包就复位（控制端停发或 UP 丢失时用） */
+    private const val SCALE_RESET_MS = 800L
 
         // TCP header 同步状态机
         private const val TCP_STATE_SYNC = 0      // 等待 0x55
@@ -115,6 +117,22 @@ class PointerService : Service() {
     private var lastX = Int.MIN_VALUE
     private var lastY = Int.MIN_VALUE
     private var lastDown = -1
+    /** 最近一次收到指针包的时间，用于「按下缩放」超时复位（UP 帧丢失时会一直偏小） */
+    private var lastPacketAt = 0L
+    private val scaleHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val scaleResetRunnable = Runnable {
+        if (android.os.SystemClock.elapsedRealtime() - lastPacketAt >= SCALE_RESET_MS) {
+            if (lastDown != 0) {
+                lastDown = 0
+                renderer?.setScale(1.0f)
+            }
+        }
+    }
+
+    private fun scheduleScaleReset() {
+        scaleHandler.removeCallbacks(scaleResetRunnable)
+        scaleHandler.postDelayed(scaleResetRunnable, SCALE_RESET_MS + 50L)
+    }
 
     private var targetDisplayId = Display.DEFAULT_DISPLAY
     private lateinit var displayManagerHelper: DisplayManagerHelper
@@ -577,6 +595,7 @@ class PointerService : Service() {
     }
 
     private fun handlePointer(abs_x: Int, abs_y: Int, show_int: Int, downing_int: Int) {
+        lastPacketAt = android.os.SystemClock.elapsedRealtime()
         android.util.Log.d("PointerService", "handlePointer x=$abs_x y=$abs_y show=$show_int down=$downing_int renderer=${renderer?.javaClass?.simpleName}")
         if (show_int == 1) {
             if (!isShow) {
@@ -593,6 +612,7 @@ class PointerService : Service() {
             if (downing_int != lastDown) {
                 lastDown = downing_int
                 renderer?.setScale(if (downing_int == 1) 0.95f else 1.0f)
+                if (downing_int == 1) scheduleScaleReset()
             }
             if (downing_int == 1) {
                 // 按下时持续上报屏幕方向，但节流到 1Hz：指针事件最高 250Hz，
@@ -883,8 +903,10 @@ class PointerService : Service() {
         context: Context,
         display: Display
     ) : PointerRenderer {
-        // 按目标显示器密度缩放，使光标物理大小与内置屏一致
-        private val baseScale = densityScaleFor(display)
+        // 按目标显示器密度缩放，使光标物理大小与内置屏一致。
+        // 注意：必须**每次使用时重算**——Presentation 可能被系统复用到别的 display，
+        // 或外接屏 DPI 在旋转/切换后变化，缓存成 val 会让光标突然变小。
+        private fun currentBaseScale(): Float = densityScaleFor(presentation.display ?: display)
         private var solid = this@PointerService.solidCursor
         private val imageView = createPointerImageView()
         private var visible = false
@@ -941,7 +963,7 @@ class PointerService : Service() {
                     shown = true
                     android.util.Log.d(
                         "PointerService",
-                        "Presentation shown on display ${presentation.display?.displayId}, baseScale=$baseScale"
+                        "Presentation shown on display ${presentation.display?.displayId}, baseScale=${currentBaseScale()}"
                     )
                     // 双重防护：FLAG_NOT_TOUCHABLE 在 Window 级别，但 Dialog 的 DecorView
                     // 默认实现仍可能消费触摸事件。在 View 层面也显式禁用，确保触摸穿透。
@@ -957,8 +979,9 @@ class PointerService : Service() {
                     android.util.Log.e("PointerService", "Presentation show failed", e)
                 }
             }
-            imageView.scaleX = baseScale
-            imageView.scaleY = baseScale
+            val bs = currentBaseScale()
+            imageView.scaleX = bs
+            imageView.scaleY = bs
             visible = true
             fade(imageView, cursorAlpha(solid))
         }
@@ -987,9 +1010,10 @@ class PointerService : Service() {
         }
 
         override fun setScale(scale: Float) {
-            // 按压系数叠加到密度基准缩放上
-            imageView.scaleX = baseScale * scale
-            imageView.scaleY = baseScale * scale
+            // 按压系数叠加到密度基准缩放上（基准每次重算）
+            val bs = currentBaseScale()
+            imageView.scaleX = bs * scale
+            imageView.scaleY = bs * scale
         }
 
         override fun refreshIcon() {
