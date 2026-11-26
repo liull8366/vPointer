@@ -59,6 +59,10 @@ class PortForwarder(
          *  （HTTP/WS/6535/6532 共用），端口转发每条下游都会新建一条上游，不设限就会把
          *  板子 httpd 的 PCB 抢光 → 表现为"网卡宕机"（ping 通、TCP 全拒）。 */
         private const val MAX_UPSTREAM = 4
+        /** 两次新建上游的最小间隔：防止突发连接把板子 PCB 抽干 */
+        private const val MIN_CONNECT_GAP_MS = 120L
+        /** 熔断时长上限：连续失败后最长暂停多久 */
+        private const val MAX_BREAKER_MS = 15_000L
 
         /** 下游空闲多久就回收，及时把上游 PCB 还给板子 */
         private const val IDLE_TIMEOUT_MS = 30_000
@@ -81,6 +85,7 @@ class PortForwarder(
 
     /** 上游建连失败后的指数退避（1s→2s→4s→8s 封顶），避免板子异常时被持续打 */
     private var connectFailStreak = 0
+    private var lastUpstreamAt = 0L
     private var nextConnectAllowedAt = 0L
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var connMgr: ConnectivityManager? = null
@@ -161,6 +166,14 @@ class PortForwarder(
             runCatching { client.close() }
             return
         }
+        // 熔断：上游连续失败期间直接拒绝新下游，别继续打板子
+        if (SystemClock.elapsedRealtime() < nextConnectAllowedAt) {
+            Log.w(TAG, "熔断中（板子上游不可用），拒绝一条下游连接")
+            connections -= client
+            runCatching { client.close() }
+            if (upstreamSlots.tryAcquire()) upstreamSlots.release()
+            return
+        }
         try {
             runCatching { client.soTimeout = IDLE_TIMEOUT_MS } // 空闲回收：长期没数据的连接主动断，释放上游 PCB
             val upstream = connectUpstream() ?: return // 目标网卡缺失或上游不可达：直接关闭本连接
@@ -229,8 +242,14 @@ class PortForwarder(
                     return null
                 }
             }
+            // 限速：连续新建上游之间至少间隔 MIN_CONNECT_GAP_MS，避免某个客户端刷连接把板子 PCB 抽干
+            val gap = SystemClock.elapsedRealtime() - lastUpstreamAt
+            if (gap in 1 until MIN_CONNECT_GAP_MS) {
+                runCatching { Thread.sleep(MIN_CONNECT_GAP_MS - gap) }
+            }
             s.tcpNoDelay = true
             s.connect(InetSocketAddress(TARGET_HOST, TARGET_PORT), CONNECT_TIMEOUT_MS)
+            lastUpstreamAt = SystemClock.elapsedRealtime()
             connectFailStreak = 0
             nextConnectAllowedAt = 0
             return s
@@ -238,7 +257,7 @@ class PortForwarder(
             Log.w(TAG, "upstream connect to $TARGET_HOST:$TARGET_PORT failed: ${e.message}")
             runCatching { s.close() }
             connectFailStreak = (connectFailStreak + 1).coerceAtMost(3)
-            val backoff = 1000L shl connectFailStreak
+            val backoff = (1000L shl connectFailStreak).coerceAtMost(MAX_BREAKER_MS)
             nextConnectAllowedAt = SystemClock.elapsedRealtime() + backoff
             Log.w(TAG, "上游失败 ${connectFailStreak} 次 → 退避 ${backoff}ms")
             return null

@@ -192,8 +192,10 @@ class LuaLogService : Service() {
     private fun startWs() {
         if (wsJob?.isActive == true) return
         wsJob = scope.launch {
+            var failStreak = 0
             while (isActive) {
                 var nicMissing = false
+                val connectAt = android.os.SystemClock.elapsedRealtime()
                 try {
                     val bound = NetBinder(this@LuaLogService).open(host, port)
                     socket = bound.socket
@@ -201,6 +203,8 @@ class LuaLogService : Service() {
                     ws = client
                     client.connect(bound.socket, "$host:$port")
                     Log.d(TAG, "ws connected $host:$port via ${bound.via}")
+                    // 连上并稳定 5s 才清零退避，避免「秒断秒连」把板子的 PCB 打满
+                    if (android.os.SystemClock.elapsedRealtime() - connectAt > 5_000L) failStreak = 0
                     publish(STATUS_RUNNING, "已连接 $host:$port · 出口 ${bound.via}")
                     client.readFrame(object : MiniWebSocket.Listener {
                         override fun onOpen() = Unit
@@ -223,7 +227,8 @@ class LuaLogService : Service() {
                 } catch (e: Exception) {
                     if (isActive) {
                         Log.w(TAG, "ws error: ${e.javaClass.simpleName}: ${e.message}")
-                        publish(STATUS_ERROR, "连接失败：${e.message ?: e.javaClass.simpleName}（1s 后重试）")
+                        failStreak = (failStreak + 1).coerceAtMost(5)
+                        publish(STATUS_ERROR, "连接失败：${e.message ?: e.javaClass.simpleName}（第 $failStreak 次，退避中）")
                     }
                 } finally {
                     runCatching { ws?.close() }
@@ -231,7 +236,12 @@ class LuaLogService : Service() {
                     runCatching { socket?.close() }
                     socket = null
                 }
-                if (isActive) delay(if (nicMissing) NIC_RESCAN_MS else RECONNECT_MS)
+                if (isActive) {
+                    // 指数退避 + 抖动：板子异常时不再每秒新建连接（那会把 10 个 PCB 打满）
+                    val base = if (nicMissing) NIC_RESCAN_MS else (RECONNECT_MS shl failStreak.coerceAtMost(5))
+                    val wait = base.coerceAtMost(MAX_RECONNECT_MS) + (0..250L).random()
+                    delay(wait)
+                }
             }
         }
     }
@@ -428,6 +438,8 @@ class LuaLogService : Service() {
         private const val RENDER_DEBOUNCE_MS = 60L
         private const val NOTIF_REFRESH_MS = 1500L
         private const val RECONNECT_MS = 1000L
+        /** 退避上限：板子挂了也只 30s 探一次 */
+        private const val MAX_RECONNECT_MS = 30_000L
         /** 网卡缺失时的重试节奏：与端口转发的 2 秒轮询一致，别用 1 秒去打空网卡 */
         private const val NIC_RESCAN_MS = 2000L
         private const val NOTIF_ID = 3
