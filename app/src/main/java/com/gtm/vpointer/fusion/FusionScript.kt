@@ -37,9 +37,13 @@ object FusionScript {
     fun helperPath(context: Context): String =
         File(context.applicationInfo.nativeLibraryDir, "libtouchgrabfwd.so").absolutePath
 
-    fun start(context: Context): String {
+    /**
+     * @param exclusive true = 独占触摸（EVIOCGRAB，原模块行为）；false = 被动读取（屏幕照常可用）
+     */
+    fun start(context: Context, exclusive: Boolean): String {
         val script = ensureScript(context)
-        val cmd = "VF_HELPER=${helperPath(context)} sh ${script.absolutePath} start 2>&1"
+        val grab = if (exclusive) "1" else "0"
+        val cmd = "VF_HELPER=${helperPath(context)} VF_GRAB=$grab sh ${script.absolutePath} start 2>&1"
         val r = RootShell.exec(cmd, 20_000)
         return r.output.ifEmpty { if (r.ok) "started" else "start 失败" }
     }

@@ -15,8 +15,10 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
@@ -44,6 +46,8 @@ fun RootScreen(
     fusionRunning: Boolean,
     fusionState: String,
     fusionLog: String,
+    fusionExclusive: Boolean,
+    onExclusiveToggle: (Boolean) -> Unit,
     onFusionStart: () -> Unit,
     onFusionStop: () -> Unit,
     onFusionRefresh: () -> Unit,
@@ -152,6 +156,24 @@ fun RootScreen(
                 modifier = Modifier.padding(bottom = 8.dp)
             )
 
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("独占触摸（原模块行为）", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    Text(
+                        text = if (fusionExclusive)
+                            "开：转发期间屏幕本身不响应，触摸只交给板子"
+                        else
+                            "关：屏幕照常可滑动/点击，同时把触摸旁听一份发给板子",
+                        fontSize = 10.sp,
+                        color = Color.Gray
+                    )
+                }
+                Switch(checked = fusionExclusive, onCheckedChange = onExclusiveToggle)
+            }
+
             Text(
                 text = "状态：" + fusionState + if (fusionRunning) "（守护在跑）" else "（未运行）",
                 fontSize = 13.sp,
@@ -206,7 +228,10 @@ fun RootScreen(
             }
 
             Text(
-                text = "说明：显示「未获得 root」时，请到 root 管理器（KernelSU / Magisk）给本应用授权，" +
+                text = "说明（独占/被动）：「独占」用 EVIOCGRAB 把触摸屏从系统手里抢走，行为与原 touch_forwarder 模块一致，" +
+                    "转发期间屏幕自身不响应，适合「屏幕完全交给板子」的用法；「被动」只旁听不抢占，屏幕照常可用。" +
+                    "切换会重启一次转发（板子重连约 2 秒），对当前正在进行的操作无影响。\n\n" +
+                    "显示「未获得 root」时，请到 root 管理器（KernelSU / Magisk）给本应用授权，" +
                     "再回来点「重新检测」。授予后悬浮窗不再需要手点系统弹窗，服务也更不容易被 Doze 回收。",
                 fontSize = 12.sp,
                 color = Color.Gray,
