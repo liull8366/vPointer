@@ -49,11 +49,38 @@ object FusionScript {
         return f
     }
 
-    /** 启动：二进制由 assets 释放后交给 root 脚本落地执行（不安装 Magisk 模块） */
-    fun start(context: Context): String {
+    /**
+     * 读取当前设备分辨率，返回 "1260x2800" 形式；读不到返回 null。
+     * Override size（用户改过分辨率）优先于 Physical size —— 以实际生效的为准。
+     */
+    fun deviceSize(context: Context): String? {
+        val out = RootShell.exec("wm size 2>/dev/null", 4_000).output
+        val lines = out.lineSequence().map { it.trim() }.toList()
+        val overrideVal = lines.firstOrNull { it.startsWith("Override size:") }
+            ?.removePrefix("Override size:")?.trim()
+        val physicalVal = lines.firstOrNull { it.startsWith("Physical size:") }
+            ?.removePrefix("Physical size:")?.trim()
+        val size = overrideVal?.takeIf { it.isNotEmpty() } ?: physicalVal?.takeIf { it.isNotEmpty() }
+        // 形如 1260x2800 才认
+        return size?.takeIf { s ->
+            val parts = s.split("x")
+            parts.size == 2 && parts.all { it.toIntOrNull() != null }
+        }
+    }
+
+    /**
+     * 启动：二进制由 assets 释放后交给 root 脚本落地执行（不安装 Magisk 模块）
+     *
+     * @param autoScreen true = 读取当前设备分辨率并以 VF_SCREEN_W/H 传给脚本
+     */
+    fun start(context: Context, autoScreen: Boolean = true): String {
         val script = ensureScript(context)
         val bin = ensureBinary(context)
-        val cmd = "VF_MASTER=${bin.absolutePath} sh ${script.absolutePath} start 2>&1"
+        val sizePart = if (autoScreen) {
+            deviceSize(context)?.split("x")?.takeIf { it.size == 2 && it.all { p -> p.toIntOrNull() != null } }
+                ?.let { "VF_SCREEN_W=${it[0]} VF_SCREEN_H=${it[1]} " } ?: ""
+        } else ""
+        val cmd = "VF_MASTER=${bin.absolutePath} ${sizePart}sh ${script.absolutePath} start 2>&1"
         val r = RootShell.exec(cmd, 20_000)
         return r.output.ifEmpty { if (r.ok) "started" else "start 失败" }
     }

@@ -86,6 +86,8 @@ class MainActivity : ComponentActivity() {
     private var fusionRunning by mutableStateOf(false)
     private var fusionState by mutableStateOf("IDLE")
     private var fusionLog by mutableStateOf("")
+    /** 自动读取当前设备分辨率并传给脚本（默认开） */
+    private var fusionAutoScreen by mutableStateOf(true)
     /** 融合实现：bin = 官方二进制（准、独占）；native = 自研助手（可切被动/0xFE） */
 
     private val fusionPrefs by lazy { getSharedPreferences("fusion", MODE_PRIVATE) }
@@ -212,6 +214,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        fusionAutoScreen = fusionPrefs.getBoolean(KEY_FUSION_AUTO_SCREEN, true)
 
         // 恢复旋转前的状态
         if (savedInstanceState != null) {
@@ -334,7 +337,7 @@ class MainActivity : ComponentActivity() {
                             selected = mainPage == 3,
                             onClick = {
                                 mainPage = 3
-            refreshFusion()
+                                refreshFusion()
                             },
                             text = { Text("Root 权限") }
                         )
@@ -440,6 +443,8 @@ class MainActivity : ComponentActivity() {
                                 fusionRunning = fusionRunning,
                                 fusionState = fusionState,
                                 fusionLog = fusionLog,
+                                fusionAutoScreen = fusionAutoScreen,
+                                onAutoScreenToggle = { applyFusionAutoScreen(it) },
                                 onFusionStart = { fusionStart() },
                                 onFusionStop = { fusionStop() },
                                 onFusionRefresh = { refreshFusion() },
@@ -693,11 +698,17 @@ class MainActivity : ComponentActivity() {
 
     // ---------------- 屏幕触摸转发（内嵌脚本） ----------------
 
+    private fun applyFusionAutoScreen(on: Boolean) {
+        fusionAutoScreen = on
+        fusionPrefs.edit().putBoolean(KEY_FUSION_AUTO_SCREEN, on).apply()
+        if (fusionRunning) fusionStopThenStart()
+    }
+
     private fun fusionStopThenStart() {
         lifecycleScope.launch {
             withContext(Dispatchers.IO) { FusionScript.stop(this@MainActivity) }
             delay(600)
-            val out = withContext(Dispatchers.IO) { FusionScript.start(this@MainActivity) }
+            val out = withContext(Dispatchers.IO) { FusionScript.start(this@MainActivity, fusionAutoScreen) }
             rootMessage = out
             refreshFusion()
         }
@@ -706,7 +717,7 @@ class MainActivity : ComponentActivity() {
     private fun fusionStart() {
         fusionState = "STARTING"
         lifecycleScope.launch {
-            val out = withContext(Dispatchers.IO) { FusionScript.start(this@MainActivity) }
+            val out = withContext(Dispatchers.IO) { FusionScript.start(this@MainActivity, fusionAutoScreen) }
             rootMessage = out
             refreshFusion()
         }
@@ -809,6 +820,7 @@ class MainActivity : ComponentActivity() {
     companion object {
         private const val OVERLAY_PERMISSION_REQUEST_CODE = 1234
         private const val OVERLAY_PERMISSION_LUA_REQUEST_CODE = 1235
+        private const val KEY_FUSION_AUTO_SCREEN = "auto_screen"
         const val EXTRA_DISPLAY_ID = "display_id"
     }
 }

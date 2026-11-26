@@ -1,14 +1,12 @@
 #!/system/bin/sh
 # fusion.sh —— 屏幕触摸转发（app 内嵌版，双实现可选）
 #
-# VF_IMPL=bin     跑模块官方 Go 二进制（绝对坐标、位置准；固定独占触摸）
-# VF_IMPL=native  跑自研 C 助手（可选：VF_GRAB=1 独占 / 0；VF_INJECT=mouse(0xFE) / touch(0xFF)）
+# 跑模块官方 Go 二进制（绝对坐标、位置准；固定独占触摸）
 #
 # 脚本统一负责：探测网卡/板子 IP、健康探测、落地二进制、root 拉起与监督、状态写盘。
 #
 # 用法（app 以 root 执行）：
-#   VF_MASTER=<官方二进制副本> VF_HELPER=<自研 .so 路径> VF_IMPL=bin|native \
-#   VF_GRAB=1|0 VF_INJECT=mouse|touch sh fusion.sh start|stop|status
+#   VF_MASTER=<官方二进制副本> [VF_SCREEN_W=1260 VF_SCREEN_H=2800] sh fusion.sh start|stop|status
 
 VF_DIR=/data/local/tmp/vfusion
 LOG=$VF_DIR/fusion.log
@@ -24,6 +22,20 @@ BOARD_SUFFIX=${VF_BOARD_SUFFIX:-1}
 
 
 mkdir -p "$VF_DIR" 2>/dev/null
+
+# 设备分辨率：app 传入优先（VF_SCREEN_W/H），否则自己读 wm size（Override 优先于 Physical）
+detect_screen() {
+    if [ -n "${VF_SCREEN_W:-}" ] && [ -n "${VF_SCREEN_H:-}" ]; then
+        SCREEN_W=$VF_SCREEN_W; SCREEN_H=$VF_SCREEN_H; SCREEN_SRC=app
+        return 0
+    fi
+    line=$(wm size 2>/dev/null | awk '/Override size/{o=$3} /Physical size/{p=$3} END{print (o!=""?o:p)}')
+    [ -n "$line" ] || return 1
+    SCREEN_W=${line%x*}
+    SCREEN_H=${line#*x}
+    SCREEN_SRC=wm
+    return 0
+}
 log() { echo "[fusion] $(date '+%F %T') $*" >> "$LOG"; }
 
 detect() {
@@ -109,6 +121,13 @@ do_start() {
         return 1
     fi
     log "健康探测通过：$BOARD :80 = 200"
+
+    if detect_screen; then
+        echo "${SCREEN_W}x${SCREEN_H}" > "$VF_DIR/screen" 2>/dev/null
+        log "设备分辨率：${SCREEN_W}x${SCREEN_H}（来源 $SCREEN_SRC）"
+    else
+        log "设备分辨率：读取失败（不影响转发，二进制按触摸量程自适应）"
+    fi
 
     install_bin || { echo "error: 官方二进制落地失败"; echo ERROR > "$STATE"; return 1; }
     log "=== start: iface=$IFACE ip=$IP board=$BOARD port=$PORT ==="

@@ -46,6 +46,8 @@ fun RootScreen(
     fusionRunning: Boolean,
     fusionState: String,
     fusionLog: String,
+    fusionAutoScreen: Boolean,
+    onAutoScreenToggle: (Boolean) -> Unit,
     onFusionStart: () -> Unit,
     onFusionStop: () -> Unit,
     onFusionRefresh: () -> Unit,
@@ -153,6 +155,24 @@ fun RootScreen(
                 color = Color.Gray,
                 modifier = Modifier.padding(bottom = 8.dp)
             )
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("自动读取设备分辨率", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    Text(
+                        text = if (fusionAutoScreen)
+                            "开：启动时读取当前设备分辨率（Override 优先）并传给脚本"
+                        else
+                            "关：不读取，使用脚本/二进制的默认行为",
+                        fontSize = 10.sp,
+                        color = Color.Gray
+                    )
+                }
+                Switch(checked = fusionAutoScreen, onCheckedChange = onAutoScreenToggle)
+            }
 
             Text(
                 text = "状态：" + fusionState + if (fusionRunning) "（守护在跑）" else "（未运行）",
