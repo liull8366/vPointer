@@ -116,12 +116,14 @@ assets/fusion.sh  ──探测网卡(192.168.73.x) → 推板子 IP
       └─ 状态文件 /data/local/tmp/vfusion/state（helper 写 UP/FALLBACK）
 ```
 
-两种模式（环境变量 `VF_GRAB`）：
+两种模式（环境变量 `VF_GRAB`，Root 页有对应开关，**默认关 = 被动**）：
 
-| 值 | 行为 |
-|---|---|
-| `1`（默认，与原模块一致） | `EVIOCGRAB` 独占：转发期间**屏幕自身不响应** |
-| `0` | 被动读取：屏幕照常可用，同时旁听一份发给板子 |
+| 值 | UI 开关 | 行为 |
+|---|---|---|
+| `0`（**默认**） | 关 | 被动读取：屏幕照常可滑动/点击，同时旁听一份发给板子 |
+| `1` | 开 | `EVIOCGRAB` 独占：转发期间**屏幕自身不响应**（原模块语义） |
+
+切换实现：`FusionScript.start(context, exclusive)` 传 `VF_GRAB`；若转发在跑则 `stop → start`（板子重连约 2s）。
 
 ---
 
@@ -248,3 +250,21 @@ dumpsys gfxinfo <包名> reset; input swipe 750 1800 750 600 250; dumpsys gfxinf
 
 - 板子文档：`https://doc.rd5isto.top/api/`（`hid-api.html` = 55 AA 控制帧全表；`touch-forwarder.html` = 原模块安装说明）
 - 板子固件：pico-hid-mapper（RP2350），TCP 6532 是“触屏转发”通道
+---
+
+## 10. 本轮修复记录（v1.1 → v1.3）
+
+按发现顺序，均为实测复现后修复：
+
+| # | 现象 | 根因 | 修复 |
+|---|---|---|---|
+| 1 | 系统整体卡顿 | 孤儿 `getevent -lt /dev/input/event9` 读到已删除节点，**100% CPU 空转**（86% 内核态） | 杀进程 + 脚本启动时 `cleanup_orphan_getevent` |
+| 2 | 拖动一顿一顿、偶发长时间停顿 | helper 在 `poll(POLLOUT,5s)` 上阻塞写，读触摸线程停摆 → evdev 64 事件缓冲溢出 | 非阻塞写 + 有界等待 |
+| 3 | 板子按键/操作失效 | 抓错设备：把 `event9`（DualSense = 板子 HID）当触摸屏 `EVIOCGRAB` | 按量程 + 名字 + `INPUT_PROP_DIRECT` 严格筛选 |
+| 4 | 板子连接反复断开（112 次/秒、3663 条 TIME_WAIT） | shell 用 `nc` + 每秒轮询 `netstat` 回订阅帧，握手来不及 | 把监听/握手搬进 native，毫秒级回 `55 AA 03 FC F7 01` |
+| 5 | 会话秒级断开 | `send()` 部分写入后只"丢弃整帧"，半帧留在流里污染板子组帧器 | 一帧原子写出，写不动 2ms 内结束会话 |
+| 6 | 响应很慢（帧率 61.6 fps / p90 22.3ms） | 8ms 节流 + 缺 `TCP_NODELAY`，帧被内核攒批（间隔中位 0ms、偶发 4s 空档） | 去掉节流 + 开 `TCP_NODELAY`，回到 ≈164 fps / 中位 5.6ms |
+| 7 | 板子断线后不恢复，`state` 卡 `UP` | `pkill -f '[l]ibtouchgrabfwd'` 把监督进程（cmdline 含该路径）一起杀掉 | 改 `pkill -x libtouchgrabfwd` |
+| 8 | 被 kill 后状态残留 / 触摸未释放 | 无信号处理，靠内核回收 | `SIGTERM` 处理：写 `FALLBACK` + 显式 `EVIOCGRAB(0)` |
+| 9 | 屏幕不能滑动（"卡"） | 默认对齐模块的独占语义，`EVIOCGRAB` 把触摸从系统手里抢走 | 1.3 起默认**被动**，Root 页提供「独占触摸」开关 |
+| 10 | 误判"板子网卡宕机" | 探针用 `curl --interface <源IP>`，Android 策略路由把包发去 wlan0 → 假超时 | 改按接口名绑：`curl --interface eth0` |
