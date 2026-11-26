@@ -19,8 +19,7 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        ndk { abiFilters += "arm64-v8a" }
-    }
+        }
 
 
     signingConfigs {
@@ -52,12 +51,15 @@ android {
     kotlinOptions {
         jvmTarget = "11"
     }
+    // 自研 C 助手已停用（改用模块官方二进制）；源码保留在 src/main/cpp 作参考
+    /*
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
             version = "3.22.1"
         }
     }
+    */
     buildFeatures {
         compose = true
     }

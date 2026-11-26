@@ -49,10 +49,7 @@ object FusionScript {
         return f
     }
 
-    /** 帮助程序路径（安装时解压到 nativeLibraryDir） */
-    fun helperPath(context: Context): String =
-        File(context.applicationInfo.nativeLibraryDir, "libtouchgrabfwd.so").absolutePath
-
+    /** 启动：二进制由 assets 释放后交给 root 脚本落地执行（不安装 Magisk 模块） */
     fun start(context: Context): String {
         val script = ensureScript(context)
         val bin = ensureBinary(context)

