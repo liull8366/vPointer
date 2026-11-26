@@ -39,6 +39,7 @@ import com.gtm.vpointer.root.RootShell
 import com.gtm.vpointer.ui.screen.PortForwardScreen
 import com.gtm.vpointer.ui.screen.RootCheck
 import com.gtm.vpointer.ui.screen.RootScreen
+import com.gtm.vpointer.ui.screen.YoloAimScreen
 import com.gtm.vpointer.ui.screen.ServiceState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -337,6 +338,11 @@ class MainActivity : ComponentActivity() {
                             },
                             text = { Text("Root 权限") }
                         )
+                        Tab(
+                            selected = mainPage == 4,
+                            onClick = { mainPage = 4 },
+                            text = { Text("YOLO 自瞄") }
+                        )
                     }
                     Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                         when (mainPage) {
@@ -427,7 +433,7 @@ class MainActivity : ComponentActivity() {
                                 onStart = { startLuaLog() },
                                 onStop = { stopLuaLog() }
                             )
-                            else -> RootScreen(
+                            3 -> RootScreen(
                                 check = rootCheck,
                                 detail = rootDetail,
                                 message = rootMessage,
@@ -442,6 +448,7 @@ class MainActivity : ComponentActivity() {
                                 onCheck = { checkRoot() },
                                 onGrant = { grantRoot() }
                             )
+                            else -> YoloAimScreen()
                         }
                     }
                 }
