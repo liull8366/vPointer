@@ -81,6 +81,12 @@ void writeState(const char* value) {
 
 long g_dropped = 0;
 
+// 注入模式：true = 0xFE HID 鼠标键（不占板子的触点名额）；false = 0xFF 绝对触摸
+bool g_injectMouse = true;
+long g_mouseLastX = -1;
+long g_mouseLastY = -1;
+int g_mouseDiv = 10;      // 原始 evdev 单位 → 像素（synaptics 量程约为像素的 10 倍）
+
 // 返回 false 表示对端已断开（调用方应结束会话）。
 // 关键：**绝不阻塞**。板子读得慢时直接丢帧，保证读触摸的循环永不停摆
 //（否则 evdev 的 64 事件内核缓冲会溢出 → 手指动作丢失 → 体感卡顿）。
@@ -111,7 +117,46 @@ bool sendAll(const void* data, size_t len) {
     return true;
 }
 
+static int16_t clampI16(long v) {
+    if (v > 32767) return 32767;
+    if (v < -32768) return -32768;
+    return static_cast<int16_t>(v);
+}
+
+// 0xFE：55 AA 09 FE | report_id | buttons | x:i16 | y:i16 | wheel:i8 | rsv
+// 语义是「相对位移 + 按键」，与板子自己的鼠标映射同源，不占用它的外部触点名额。
+bool emitMouse(int phase, int x, int y) {
+    long dx = 0, dy = 0;
+    if (phase == kPhaseDown) {
+        g_mouseLastX = x;
+        g_mouseLastY = y;
+    } else if (phase == kPhaseMove) {
+        if (g_mouseLastX >= 0) {
+            long div = g_mouseDiv > 0 ? g_mouseDiv : 1;
+            dx = (x - g_mouseLastX) / div;
+            dy = (y - g_mouseLastY) / div;
+        }
+        g_mouseLastX = x;
+        g_mouseLastY = y;
+    } else {   // UP
+        dx = dy = 0;
+    }
+
+    uint8_t f[12] = {0x55, 0xAA, 0x09, 0xFE, 0x00,
+                     0, 0, 0, 0, 0, 0, 0};
+    f[5] = (phase == kPhaseUp) ? 0x00 : 0x01;      // bit0 = 左键
+    int16_t sx = clampI16(dx);
+    int16_t sy = clampI16(dy);
+    memcpy(f + 6, &sx, 2);
+    memcpy(f + 8, &sy, 2);
+    f[10] = 0;                                      // wheel
+    f[11] = 0;                                      // reserved
+    return sendAll(f, sizeof(f));
+}
+
 bool emit(int phase, int x, int y) {
+    if (g_injectMouse) return emitMouse(phase, x, y);
+
     uint8_t f[14] = {0x55, 0xAA, 0x0B, 0xFF, static_cast<uint8_t>(phase), 0x02,
                      0, 0, 0, 0, 0, 0, 0, 0};
     uint32_t nx = scale(x, g_maxX);
@@ -400,6 +445,15 @@ int main(int argc, char** argv) {
     g_maxX = atoi(argv[2]);
     g_maxY = atoi(argv[3]);
     int port = atoi(argv[4]);
+    if (const char* inj = getenv("VF_INJECT")) {
+        g_injectMouse = !(inj[0] == 't');       // "touch" → 0xFF；其它/缺省 → 鼠标键
+    }
+    if (const char* dv = getenv("VF_MOUSE_DIV")) {
+        int v = atoi(dv);
+        if (v > 0) g_mouseDiv = v;
+    }
+    fprintf(stderr, "[touchfwd] 注入方式: %s（单位除数 %d）\n",
+            g_injectMouse ? "0xFE 鼠标键" : "0xFF 绝对触摸", g_mouseDiv);
     if (port <= 0) port = 6532;
 
     int devFd = open(devPath, O_RDONLY | O_CLOEXEC);

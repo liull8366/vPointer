@@ -46,8 +46,6 @@ fun RootScreen(
     fusionRunning: Boolean,
     fusionState: String,
     fusionLog: String,
-    fusionExclusive: Boolean,
-    onExclusiveToggle: (Boolean) -> Unit,
     onFusionStart: () -> Unit,
     onFusionStop: () -> Unit,
     onFusionRefresh: () -> Unit,
@@ -150,29 +148,11 @@ fun RootScreen(
             )
             Text(
                 text = "等价 touch_forwarder 模块：脚本自动探测网卡取出板子 IP，用 nc 监听 6532，" +
-                    "帮助程序以 root 独占触摸并把帧转发给板子。停止即释放触摸。",
+                    "直接以 root 运行模块官方二进制（不安装 Magisk 模块）：它自己监听 6532、独占触摸屏、发绝对坐标帧给板子。停止即释放触摸。",
                 fontSize = 11.sp,
                 color = Color.Gray,
                 modifier = Modifier.padding(bottom = 8.dp)
             )
-
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("独占触摸（原模块行为）", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                    Text(
-                        text = if (fusionExclusive)
-                            "开：转发期间屏幕本身不响应，触摸只交给板子"
-                        else
-                            "关：屏幕照常可滑动/点击，同时把触摸旁听一份发给板子",
-                        fontSize = 10.sp,
-                        color = Color.Gray
-                    )
-                }
-                Switch(checked = fusionExclusive, onCheckedChange = onExclusiveToggle)
-            }
 
             Text(
                 text = "状态：" + fusionState + if (fusionRunning) "（守护在跑）" else "（未运行）",
@@ -228,9 +208,8 @@ fun RootScreen(
             }
 
             Text(
-                text = "说明（独占/被动）：「独占」用 EVIOCGRAB 把触摸屏从系统手里抢走，行为与原 touch_forwarder 模块一致，" +
-                    "转发期间屏幕自身不响应，适合「屏幕完全交给板子」的用法；「被动」只旁听不抢占，屏幕照常可用。" +
-                    "切换会重启一次转发（板子重连约 2 秒），对当前正在进行的操作无影响。\n\n" +
+                text = "说明：转发期间触摸屏被 EVIOCGRAB 独占，屏幕本身不响应（与官方 touch_forwarder 模块行为一致）；" +
+                    "坐标是绝对坐标，位置与手指一致。启动前会探测板子 :80，异常时拒绝启动并提示断电复位。\n\n" +
                     "显示「未获得 root」时，请到 root 管理器（KernelSU / Magisk）给本应用授权，" +
                     "再回来点「重新检测」。授予后悬浮窗不再需要手点系统弹窗，服务也更不容易被 Doze 回收。",
                 fontSize = 12.sp,

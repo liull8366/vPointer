@@ -86,8 +86,7 @@ class MainActivity : ComponentActivity() {
     private var fusionRunning by mutableStateOf(false)
     private var fusionState by mutableStateOf("IDLE")
     private var fusionLog by mutableStateOf("")
-    /** 独占触摸：true=EVIOCGRAB（原模块行为，屏幕不响应）；false=被动读取（屏幕可用） */
-    private var fusionExclusive by mutableStateOf(false)
+
     private val fusionPrefs by lazy { getSharedPreferences("fusion", MODE_PRIVATE) }
 
     // 光标样式相关状态
@@ -440,8 +439,6 @@ class MainActivity : ComponentActivity() {
                                 fusionRunning = fusionRunning,
                                 fusionState = fusionState,
                                 fusionLog = fusionLog,
-                                fusionExclusive = fusionExclusive,
-                                onExclusiveToggle = { on -> applyFusionExclusive(on) },
                                 onFusionStart = { fusionStart() },
                                 onFusionStop = { fusionStop() },
                                 onFusionRefresh = { refreshFusion() },
@@ -695,20 +692,11 @@ class MainActivity : ComponentActivity() {
 
     // ---------------- 屏幕触摸转发（内嵌脚本） ----------------
 
-    /** 切换独占/被动：持久化，并（若转发在跑）重启一次让模式立即生效 */
-    private fun applyFusionExclusive(on: Boolean) {
-        fusionExclusive = on
-        fusionPrefs.edit().putBoolean(KEY_FUSION_EXCLUSIVE, on).apply()
-        if (fusionRunning) {
-            fusionStopThenStart()
-        }
-    }
-
     private fun fusionStopThenStart() {
         lifecycleScope.launch {
             withContext(Dispatchers.IO) { FusionScript.stop(this@MainActivity) }
             delay(600)
-            val out = withContext(Dispatchers.IO) { FusionScript.start(this@MainActivity, fusionExclusive) }
+            val out = withContext(Dispatchers.IO) { FusionScript.start(this@MainActivity) }
             rootMessage = out
             refreshFusion()
         }
@@ -717,7 +705,7 @@ class MainActivity : ComponentActivity() {
     private fun fusionStart() {
         fusionState = "STARTING"
         lifecycleScope.launch {
-            val out = withContext(Dispatchers.IO) { FusionScript.start(this@MainActivity, fusionExclusive) }
+            val out = withContext(Dispatchers.IO) { FusionScript.start(this@MainActivity) }
             rootMessage = out
             refreshFusion()
         }
@@ -821,6 +809,7 @@ class MainActivity : ComponentActivity() {
         private const val OVERLAY_PERMISSION_REQUEST_CODE = 1234
         private const val OVERLAY_PERMISSION_LUA_REQUEST_CODE = 1235
         private const val KEY_FUSION_EXCLUSIVE = "exclusive"
+        private const val KEY_FUSION_INJECT_MOUSE = "inject_mouse"
         const val EXTRA_DISPLAY_ID = "display_id"
     }
 }

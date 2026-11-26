@@ -20,6 +20,8 @@ object FusionScript {
 
     private const val ASSET = "fusion.sh"
     private const val NAME = "fusion.sh"
+    private const val BIN_ASSET = "touch_forwarder_arm64"
+    private const val BIN_NAME = "touch_forwarder_arm64"
     private const val STATE_DIR = "/data/local/tmp/vfusion"
 
     /** 脚本落盘（每次都覆盖，保证与 APK 内版本一致） */
@@ -33,17 +35,28 @@ object FusionScript {
         return f
     }
 
+    /** 把内嵌的模块二进制释放到 app 私有目录（root 可读，脚本会再拷到 /data/local/tmp） */
+    fun ensureBinary(context: Context): File {
+        val f = File(context.filesDir, BIN_NAME)
+        val needsCopy = !f.exists() || f.length() == 0L
+        if (needsCopy) {
+            context.assets.open(BIN_ASSET).use { input ->
+                f.outputStream().use { output -> input.copyTo(output) }
+            }
+        }
+        f.setReadable(true, false)
+        f.setExecutable(true, false)
+        return f
+    }
+
     /** 帮助程序路径（安装时解压到 nativeLibraryDir） */
     fun helperPath(context: Context): String =
         File(context.applicationInfo.nativeLibraryDir, "libtouchgrabfwd.so").absolutePath
 
-    /**
-     * @param exclusive true = 独占触摸（EVIOCGRAB，原模块行为）；false = 被动读取（屏幕照常可用）
-     */
-    fun start(context: Context, exclusive: Boolean): String {
+    fun start(context: Context): String {
         val script = ensureScript(context)
-        val grab = if (exclusive) "1" else "0"
-        val cmd = "VF_HELPER=${helperPath(context)} VF_GRAB=$grab sh ${script.absolutePath} start 2>&1"
+        val bin = ensureBinary(context)
+        val cmd = "VF_MASTER=${bin.absolutePath} sh ${script.absolutePath} start 2>&1"
         val r = RootShell.exec(cmd, 20_000)
         return r.output.ifEmpty { if (r.ok) "started" else "start 失败" }
     }
